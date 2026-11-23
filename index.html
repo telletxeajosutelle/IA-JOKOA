@@ -1,0 +1,255 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Juego controlado por IA</title>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8.6/dist/teachablemachine-pose.min.js"></script>
+
+<style>
+body {
+  font-family: Arial;
+  text-align: center;
+  background: #eef4ff;
+  padding: 20px;
+}
+
+#juego {
+  background: white;
+  border: 3px solid #333;
+  border-radius: 15px;
+  height: 250px;
+  max-width: 600px;
+  margin: 20px auto;
+  position: relative;
+  overflow: hidden;
+}
+
+#personaje {
+  position: absolute;
+  bottom: 20px;
+  left: 20%;
+  font-size: 65px;
+}
+
+#estrella {
+  position: absolute;
+  bottom: 200px;
+  left: 25%;
+  font-size: 45px;
+  transition: bottom 0.2s;
+}
+
+.saltar {
+  animation: salto 0.7s ease;
+}
+
+@keyframes salto {
+  0% { bottom: 20px; }
+  50% { bottom: 150px; }
+  100% { bottom: 20px; }
+}
+
+button {
+  padding: 12px 20px;
+  margin: 10px;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+#camara canvas {
+  width: 200px;
+  border-radius: 10px;
+}
+</style>
+</head>
+
+<body>
+
+<h1>¡Controla el juego con tu cuerpo!</h1>
+
+<p>Levanta los brazos para saltar y conseguir estrellas.</p>
+
+<label>Dirección de tu modelo:</label><br>
+<input id="url" type="text"
+placeholder="Pega aquí la URL de Teachable Machine"
+style="width:90%;max-width:500px;padding:10px">
+
+<br>
+<button onclick="iniciar()">Cargar modelo y activar cámara</button>
+
+<div id="camara"></div>
+
+<h3 id="resultado">Esperando al modelo...</h3>
+<h3>Puntuación: <span id="puntos">0</span></h3>
+
+<div id="juego">
+  <div id="personaje">🏃</div>
+  <div id="estrella">⭐</div>
+</div>
+
+<script>
+let modelo;
+let webcam;
+let preparado = false;
+let puntos = 0;
+let puedeSaltar = true;
+let estrellaX = 100;
+let direccionEstrella = 1;
+let velocidadEstrella = 2;
+let movimientoEstrellaActivo = false;
+
+async function iniciar() {
+  try {
+    const direccion = document.getElementById("url")
+      .value.trim().replace(/\/?$/, "/");
+
+    if (!direccion.startsWith("https://")) {
+      throw new Error("Introduce la URL HTTPS de tu modelo.");
+    }
+
+    document.getElementById("resultado").textContent =
+      "Cargando modelo...";
+
+    modelo = await tmPose.load(
+      direccion + "model.json",
+      direccion + "metadata.json"
+    );
+
+    webcam = new tmPose.Webcam(200, 200, true);
+    await webcam.setup();
+    await webcam.play();
+
+    document.getElementById("camara").appendChild(webcam.canvas);
+
+    preparado = true;
+    document.getElementById("resultado").textContent =
+      "¡IA preparada!";
+
+    if (!movimientoEstrellaActivo) {
+    movimientoEstrellaActivo = true;
+    requestAnimationFrame(moverEstrella);
+    }
+
+    bucle();
+  } catch (error) {
+    document.getElementById("resultado").textContent =
+      "Error: " + error.message;
+  }
+}
+
+async function bucle() {
+  if (!preparado) return;
+
+  webcam.update();
+
+  const estimacion = await modelo.estimatePose(webcam.canvas);
+  const predicciones = await modelo.predict(
+    estimacion.posenetOutput
+  );
+
+  let mejor = predicciones.reduce((a, b) =>
+    a.probability > b.probability ? a : b
+  );
+
+  const clase = mejor.className.toUpperCase();
+  const confianza = mejor.probability;
+
+  document.getElementById("resultado").textContent =
+    "Pose: " + clase + " (" +
+    Math.round(confianza * 100) + "%)";
+
+  if (confianza > 0.85) {
+
+    if (clase === "SALTAR" && puedeSaltar) {
+      saltar();
+      puedeSaltar = false;
+    }
+
+    if (clase === "NEUTRAL") {
+      puedeSaltar = true;
+    }
+  }
+  comprobarColision();
+
+
+  requestAnimationFrame(bucle);
+}
+
+function saltar() {
+  const personaje = document.getElementById("personaje");
+
+  personaje.classList.remove("saltar");
+  void personaje.offsetWidth;
+  personaje.classList.add("saltar");
+}
+
+function comprobarColision() {
+  const personaje = document.getElementById("personaje");
+  const estrella = document.getElementById("estrella");
+
+  // Si la estrella está escondida, no comprobamos nada
+  if (estrella.style.display === "none") return;
+
+  const p = personaje.getBoundingClientRect();
+  const e = estrella.getBoundingClientRect();
+
+  // Comprobar si los dos elementos se están tocando
+  const tocando =
+    p.left < e.right &&
+    p.right > e.left &&
+    p.top < e.bottom &&
+    p.bottom > e.top;
+
+  if (tocando) {
+    // Sumar un punto
+    puntos++;
+    document.getElementById("puntos").textContent = puntos;
+
+    // Hacer desaparecer la estrella
+    estrella.style.display = "none";
+
+    // Crear otra estrella después de 1 segundo
+    setTimeout(() => {
+    estrellaX = 100;
+    direccionEstrella = 1;
+
+    estrella.style.bottom = "110px";
+    estrella.style.left = estrellaX + "px";
+    estrella.style.display = "block";
+  }, 1000);
+  }
+}
+
+function moverEstrella() {
+  const juego = document.getElementById("juego");
+  const estrella = document.getElementById("estrella");
+
+  if (estrella.style.display !== "none") {
+    const limite = juego.clientWidth - estrella.offsetWidth;
+
+    estrellaX += velocidadEstrella * direccionEstrella;
+
+    // Si llega al extremo derecho, cambia hacia la izquierda
+    if (estrellaX >= limite) {
+      estrellaX = limite;
+      direccionEstrella = -1;
+    }
+
+    // Si llega al extremo izquierdo, cambia hacia la derecha
+    if (estrellaX <= 0) {
+      estrellaX = 0;
+      direccionEstrella = 1;
+    }
+
+    estrella.style.left = estrellaX + "px";
+  }
+
+  requestAnimationFrame(moverEstrella);
+}
+</script>
+
+</body>
+</html>
